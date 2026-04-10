@@ -320,6 +320,9 @@ struct llama_model::impl {
     std::vector<layer_dev> dev_layer;
 
     bool has_tensor_overrides;
+
+    // per-layer mmap ranges: [il] = {min_offset, max_offset}
+    std::vector<std::pair<size_t, size_t>> layer_mmap_ranges;
 };
 
 llama_model::llama_model(const llama_model_params & params) : params(params), pimpl(std::make_unique<impl>()) {
@@ -7675,7 +7678,37 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
         }
     }
 
+    // build per-layer mmap offset ranges before ml goes out of scope
+    if (params.lazy_mmap) {
+        pimpl->layer_mmap_ranges.resize(hparams.n_layer, {SIZE_MAX, 0});
+        for (const auto & kv : ml.weights_map) {
+            const std::string & name = kv.first;
+            if (name.rfind("blk.", 0) != 0) continue;
+            int il = std::stoi(name.substr(4, name.find('.', 4) - 4));
+            size_t offs = kv.second.offs;
+            size_t end  = offs + ggml_nbytes(kv.second.tensor);
+            pimpl->layer_mmap_ranges[il].first  = std::min(pimpl->layer_mmap_ranges[il].first,  offs);
+            pimpl->layer_mmap_ranges[il].second = std::max(pimpl->layer_mmap_ranges[il].second, end);
+        }
+    }
+
     return true;
+}
+
+void llama_model::release_layer(int il) const {
+    if (!params.lazy_mmap) return;
+    if (il < 0 || il >= (int)pimpl->layer_mmap_ranges.size()) return;
+    const auto & [first, last] = pimpl->layer_mmap_ranges[il];
+    if (first == SIZE_MAX || last == 0) return;
+#if defined(_POSIX_MAPPED_FILES)
+    for (const auto & mapping : pimpl->mappings) {
+        posix_madvise((uint8_t *)mapping->addr() + first, last - first, POSIX_MADV_DONTNEED);
+    }
+#endif
+}
+
+bool llama_model::is_lazy_mmap() const {
+    return params.lazy_mmap;
 }
 
 std::string llama_model::arch_name() const {

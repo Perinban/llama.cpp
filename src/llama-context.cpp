@@ -61,6 +61,7 @@ llama_context::llama_context(
                                hparams.n_ctx_orig_yarn != 0 ? hparams.n_ctx_orig_yarn :
                                                               hparams.n_ctx_train;
 
+    cparams.lazy_mmap         = model.is_lazy_mmap();
     cparams.cb_eval           = params.cb_eval;
     cparams.cb_eval_user_data = params.cb_eval_user_data;
 
@@ -1196,6 +1197,23 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
 
         ggml_backend_sched_reset(sched.get());
         ggml_backend_sched_set_eval_callback(sched.get(), cparams.cb_eval, cparams.cb_eval_user_data);
+
+        // lazy layer eviction: release layer pages after compute, prefill only
+        struct lazy_evict_ud { llama_context * ctx; };
+        lazy_evict_ud lazy_ud { this };
+        if (cparams.lazy_mmap && ubatch.n_tokens > 1) {
+            ggml_backend_sched_set_eval_callback(sched.get(),
+                [](ggml_tensor * t, bool ask, void * user_data) -> bool {
+                    if (ask) {
+                        const char * name = t->name;
+                        return strncmp(name, "l_out-", 6) == 0;
+                    }
+                    auto * ud = (lazy_evict_ud *) user_data;
+                    int il = atoi(t->name + 6);
+                    ud->ctx->model.release_layer(il);
+                    return true;
+                }, &lazy_ud);
+        }
 
         //const auto t_start_us = ggml_time_us();
 
