@@ -2218,6 +2218,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_MMAP"));
     add_opt(common_arg(
+        {"--lazy-mmap"},
+        {"--no-lazy-mmap"},
+        string_format("skip mmap prefetch, let OS page model on demand (default: %s)", params.lazy_mmap ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.lazy_mmap = value;
+        }
+    ).set_env("LLAMA_ARG_LAZY_MMAP"));
+    add_opt(common_arg(
         {"-dio", "--direct-io"},
         {"-ndio", "--no-direct-io"},
         string_format("use DirectIO if available. (default: %s)", params.use_direct_io ? "enabled" : "disabled"),

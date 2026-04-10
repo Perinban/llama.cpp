@@ -7525,7 +7525,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
     ml.done_getting_tensors();
 
-    ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);
+    ml.init_mappings(!params.lazy_mmap, use_mlock ? &pimpl->mlock_mmaps : nullptr);
     pimpl->mappings.reserve(ml.mappings.size());
 
     // create the backend buffers
@@ -8717,6 +8717,7 @@ llama_model_params llama_model_default_params() {
         /*.host_ptr_size               =*/ 0,
         /*.vocab_only                  =*/ false,
         /*.use_mmap                    =*/ true,
+        /*.lazy_mmap                  =*/ false,
         /*.use_direct_io               =*/ false,
         /*.use_mlock                   =*/ false,
         /*.check_tensors               =*/ false,
