@@ -2302,11 +2302,16 @@ bool llama_kv_cache::sys_prompt_register(uint32_t id, uint32_t n_tokens) {
 
     auto & cells = v_cells[0];
 
-    for (uint32_t i = 0; i < n_tokens; ++i) {
+    uint32_t next_offset = 0;
+    for (auto & [k, v] : sys_prompt_registry) {
+        next_offset = std::max(next_offset, v.offset + v.n_tokens);
+    }
+
+    for (uint32_t i = next_offset; i < next_offset + n_tokens; ++i) {
         cells.set_persistent(i, true);
     }
 
-    sys_prompt_registry[id] = { n_tokens };
+    sys_prompt_registry[id] = { next_offset, n_tokens };
     seq_to_stream[n_seq_max - 1] = 0;
 
     return true;
@@ -2316,11 +2321,12 @@ void llama_kv_cache::sys_prompt_restore(uint32_t id, llama_seq_id slot_seq_id) {
     auto it = sys_prompt_registry.find(id);
     if (it == sys_prompt_registry.end()) return;
 
+    const uint32_t offset   = it->second.offset;
     const uint32_t n_tokens = it->second.n_tokens;
 
-    seq_cp((llama_seq_id)(n_seq_max - 1), slot_seq_id, 0, (llama_pos) n_tokens);
+    seq_cp((llama_seq_id)(n_seq_max - 1), slot_seq_id, (llama_pos) offset, (llama_pos)(offset + n_tokens));
 
-    v_heads[seq_to_stream[slot_seq_id]] = n_tokens;
+    v_heads[seq_to_stream[slot_seq_id]] = offset + n_tokens;
 }
 
 bool llama_kv_cache::sys_prompt_exists(uint32_t id) const {
@@ -2331,4 +2337,10 @@ uint32_t llama_kv_cache::sys_prompt_n_tokens(uint32_t id) const {
     auto it = sys_prompt_registry.find(id);
     if (it == sys_prompt_registry.end()) return 0;
     return it->second.n_tokens;
+}
+
+uint32_t llama_kv_cache::sys_prompt_offset(uint32_t id) const {
+    auto it = sys_prompt_registry.find(id);
+    if (it == sys_prompt_registry.end()) return 0;
+    return it->second.offset;
 }

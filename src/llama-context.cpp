@@ -3677,3 +3677,9 @@ uint32_t llama_kv_cache_sys_prompt_n_tokens(struct llama_context * ctx, uint32_t
     if (!kv) return 0;
     return kv->sys_prompt_n_tokens(id);
 }
+
+uint32_t llama_kv_cache_sys_prompt_offset(struct llama_context * ctx, uint32_t id) {
+    auto * kv = dynamic_cast<llama_kv_cache *>(ctx->get_memory());
+    if (!kv) return 0;
+    return kv->sys_prompt_offset(id);
+}

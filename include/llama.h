@@ -773,6 +773,7 @@ extern "C" {
     LLAMA_API void llama_kv_cache_sys_prompt_restore (struct llama_context * ctx, uint32_t id, int32_t slot_seq_id);
     LLAMA_API bool llama_kv_cache_sys_prompt_exists  (struct llama_context * ctx, uint32_t id);
     LLAMA_API uint32_t llama_kv_cache_sys_prompt_n_tokens(struct llama_context * ctx, uint32_t id);
+    LLAMA_API uint32_t llama_kv_cache_sys_prompt_offset    (struct llama_context * ctx, uint32_t id);
 
     //
     // State / sessions

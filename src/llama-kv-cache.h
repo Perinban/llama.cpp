@@ -147,6 +147,7 @@ public:
     void sys_prompt_restore (uint32_t id, llama_seq_id slot_seq_id);
     bool sys_prompt_exists   (uint32_t id) const;
     uint32_t sys_prompt_n_tokens(uint32_t id) const;
+    uint32_t sys_prompt_offset    (uint32_t id) const;
 
     //
     // llama_kv_cache specific API
@@ -254,6 +255,7 @@ private:
 
 
     struct sys_prompt_entry {
+        uint32_t offset   = 0;
         uint32_t n_tokens = 0;
     };
 
