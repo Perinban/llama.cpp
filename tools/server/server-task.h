@@ -346,6 +346,7 @@ struct server_task_result_cmpl_final : server_task_result {
     int32_t n_prompt_tokens;
     int32_t n_prompt_tokens_cache;
     int32_t n_tokens_cached;
+    int32_t n_sys_tokens = 0;
     bool has_new_line;
     std::string stopping_word;
     stop_type stop = STOP_TYPE_NONE;
@@ -412,6 +413,7 @@ struct server_task_result_cmpl_partial : server_task_result {
     int32_t n_decoded;
     int32_t n_prompt_tokens;
     int32_t n_prompt_tokens_cache;
+    int32_t n_sys_tokens = 0;
 
     bool post_sampling_probs;
     bool is_progress = false;
