@@ -4,6 +4,7 @@
 #include "llama-io.h"
 #include "llama-model.h"
 #include "llama-context.h"
+#include "llama-arch.h"
 
 #include <algorithm>
 #include <cassert>
@@ -248,6 +249,8 @@ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
                 continue;
             }
 
+
+        if (cells.is_persistent(i)) { continue; }
             if (cells.seq_has(i, seq_id) && cells.seq_rm(i, seq_id)) {
                 if (new_head == cells.size()) {
                     new_head = i;
@@ -272,6 +275,8 @@ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
                     continue;
                 }
 
+
+                if (cells.is_persistent(i)) { continue; }
                 cells.rm(i);
 
                 if (new_head == cells.size()) {
@@ -385,6 +390,8 @@ void llama_kv_cache::seq_keep(llama_seq_id seq_id) {
     uint32_t new_head = cells.size();
 
     for (uint32_t i = 0; i < cells.size(); ++i) {
+
+        if (cells.is_persistent(i)) { continue; }
         if (cells.seq_keep(i, seq_id)) {
             if (new_head == cells.size()) {
                 new_head = i;
@@ -846,6 +853,8 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
                 //    - mask SWA, using current max pos for that sequence in the cache
                 //                always insert in the cell with minimum pos
                 bool can_use = cells.is_empty(idx);
+
+                if (cells.is_persistent(idx)) { can_use = false; }
 
                 if (!can_use && cells.seq_count(idx) == 1) {
                     const llama_pos pos_cell = cells.pos_get(idx);
@@ -2282,4 +2291,44 @@ void llama_kv_cache_context::set_input_kq_mask(ggml_tensor * dst, const llama_ub
 
 void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const {
     kv->set_input_pos_bucket(dst, ubatch);
+}
+
+// sys_prompt registry
+
+bool llama_kv_cache::sys_prompt_register(uint32_t id, uint32_t n_tokens) {
+    if (n_swa > 0)                              return false;
+    if (swa_type != LLAMA_SWA_TYPE_NONE)        return false;
+    if (llm_arch_is_recurrent(model.arch))      return false;
+
+    auto & cells = v_cells[0];
+
+    for (uint32_t i = 0; i < n_tokens; ++i) {
+        cells.set_persistent(i, true);
+    }
+
+    sys_prompt_registry[id] = { n_tokens };
+    seq_to_stream[n_seq_max - 1] = 0;
+
+    return true;
+}
+
+void llama_kv_cache::sys_prompt_restore(uint32_t id, llama_seq_id slot_seq_id) {
+    auto it = sys_prompt_registry.find(id);
+    if (it == sys_prompt_registry.end()) return;
+
+    const uint32_t n_tokens = it->second.n_tokens;
+
+    seq_cp((llama_seq_id)(n_seq_max - 1), slot_seq_id, 0, (llama_pos) n_tokens);
+
+    v_heads[seq_to_stream[slot_seq_id]] = n_tokens;
+}
+
+bool llama_kv_cache::sys_prompt_exists(uint32_t id) const {
+    return sys_prompt_registry.count(id) > 0;
+}
+
+uint32_t llama_kv_cache::sys_prompt_n_tokens(uint32_t id) const {
+    auto it = sys_prompt_registry.find(id);
+    if (it == sys_prompt_registry.end()) return 0;
+    return it->second.n_tokens;
 }

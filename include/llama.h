@@ -768,6 +768,11 @@ extern "C" {
     // Check if the memory supports shifting
     LLAMA_API bool llama_memory_can_shift(llama_memory_t mem);
 
+    LLAMA_API bool llama_kv_cache_sys_prompt_register(struct llama_context * ctx, uint32_t id, uint32_t n_tokens);
+    LLAMA_API void llama_kv_cache_sys_prompt_restore (struct llama_context * ctx, uint32_t id, int32_t slot_seq_id);
+    LLAMA_API bool llama_kv_cache_sys_prompt_exists  (struct llama_context * ctx, uint32_t id);
+    LLAMA_API uint32_t llama_kv_cache_sys_prompt_n_tokens(struct llama_context * ctx, uint32_t id);
+
     //
     // State / sessions
     //

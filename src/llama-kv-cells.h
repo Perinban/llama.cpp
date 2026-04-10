@@ -43,6 +43,8 @@ public:
 
         used.clear();
 
+        persistent.clear();
+
         for (uint32_t s = 0; s < LLAMA_MAX_SEQ; ++s) {
             seq_pos[s].clear();
         }
@@ -389,6 +391,16 @@ public:
         return pos[i] >= p0 && pos[i] < p1;
     }
 
+    void set_persistent(uint32_t i, bool val) {
+        assert(i < pos.size());
+        if (val) persistent.insert(i);
+        else     persistent.erase(i);
+    }
+
+    bool is_persistent(uint32_t i) const {
+        return persistent.count(i) > 0;
+    }
+
     // set the position of an empty cell
     // does not modify "has_shift"
     // note: call only if the cell is empty
@@ -460,6 +472,9 @@ private:
 
     // set of indices of used cells (i.e. pos[i] != -1, allowed to not have any seq_id)
     std::set<uint32_t> used;
+
+    // set of indices of persistent cells (never evicted)
+    std::set<uint32_t> persistent;
 
     std::vector<llama_pos> pos;
 

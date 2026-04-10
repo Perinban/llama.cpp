@@ -143,6 +143,11 @@ public:
     void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) const override;
     void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) override;
 
+    bool sys_prompt_register(uint32_t id, uint32_t n_tokens);
+    void sys_prompt_restore (uint32_t id, llama_seq_id slot_seq_id);
+    bool sys_prompt_exists   (uint32_t id) const;
+    uint32_t sys_prompt_n_tokens(uint32_t id) const;
+
     //
     // llama_kv_cache specific API
     //
@@ -247,6 +252,12 @@ private:
     // pending stream copies that will be applied during the next update
     stream_copy_info sc_info;
 
+
+    struct sys_prompt_entry {
+        uint32_t n_tokens = 0;
+    };
+
+    std::unordered_map<uint32_t, sys_prompt_entry> sys_prompt_registry;
     std::vector<kv_layer> layers;
 
     // model layer id -> KV cache layer id

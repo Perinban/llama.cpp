@@ -73,6 +73,7 @@ struct server_slot {
     int32_t n_remaining = -1;
     int32_t i_batch     = -1;
 
+    int32_t n_sys_tokens              = 0; // persistent system prompt token count
     int32_t n_prompt_tokens_cache     = 0;
     int32_t n_prompt_tokens_processed = 0;
 
@@ -540,6 +541,39 @@ public:
     // note: chat_params must not be refreshed upon existing sleeping state
     server_chat_params chat_params;
 
+    // register system prompt into persistent KV cells
+    // returns: 0=ok, -1=already cached, -2=decode failed, -3=register failed
+    int sys_prompt_cache(const std::string & text, uint32_t id) {
+        if (llama_kv_cache_sys_prompt_exists(ctx, id)) return -1;
+
+        const auto sys_tokens = common_tokenize(ctx, text, false, true);
+        const uint32_t n_sys  = (uint32_t) sys_tokens.size();
+
+        common_batch_clear(batch);
+        for (uint32_t i = 0; i < n_sys; i++) {
+            common_batch_add(batch, sys_tokens[i], i, {(llama_seq_id)(llama_n_seq_max(ctx) - 1)}, false);
+        }
+
+        if (llama_decode(ctx, batch) != 0) {
+            common_batch_clear(batch);
+            return -2;
+        }
+        common_batch_clear(batch);
+
+        if (!llama_kv_cache_sys_prompt_register(ctx, id, n_sys)) return -3;
+
+        SRV_INF("system prompt cached: id=%u, n_tokens=%u\n", id, n_sys);
+        return (int) n_sys;
+    }
+
+    bool sys_prompt_exists(uint32_t id) const {
+        return llama_kv_cache_sys_prompt_exists(ctx, id);
+    }
+
+    void sys_prompt_restore(uint32_t id, int32_t slot_id) {
+        llama_kv_cache_sys_prompt_restore(ctx, id, slot_id);
+    }
+
     ~server_context_impl() {
         if (!sleeping) {
             // destroy() is already called when entering sleeping state
@@ -627,6 +661,8 @@ private:
         SRV_INF("loading model '%s'\n", params.model.path.c_str());
 
         params_base = params;
+        params_base.n_parallel += 1;
+        if (params_base.n_parallel > 1 && params_base.n_ctx > 0) { params_base.n_ctx = (params_base.n_ctx / (params_base.n_parallel - 1)) * params_base.n_parallel; }
 
         llama_init = common_init_from_params(params_base);
 
@@ -741,7 +777,7 @@ private:
         slot_prompt_similarity = params_base.slot_prompt_similarity;
 
         // setup slots
-        SRV_INF("initializing slots, n_slots = %d\n", params_base.n_parallel);
+        SRV_INF("initializing slots, n_slots = %d\n", params_base.n_parallel - 1);
 
         const int n_ctx_train = llama_model_n_ctx_train(model);
 
@@ -759,7 +795,7 @@ private:
         }
 
         // initialize slots
-        for (int i = 0; i < params_base.n_parallel; i++) {
+        for (int i = 0; i < params_base.n_parallel - 1; i++) {
             server_slot slot;
 
             slot.id    = i;
@@ -809,6 +845,7 @@ private:
             const int32_t n_batch = llama_n_batch(ctx);
             batch = llama_batch_init(std::max(n_batch, params_base.n_parallel), 0, 1);
         }
+
 
         if (params_base.cache_ram_mib != 0) {
             if (params_base.cache_ram_mib < 0) {
@@ -1251,7 +1288,7 @@ private:
         }
 
         // if context shifting is disabled, make sure that we don't run out of context
-        if (!params_base.ctx_shift && slot.prompt.n_tokens() + 1 >= slot.n_ctx) {
+        if (!params_base.ctx_shift && slot.n_sys_tokens + slot.prompt.n_tokens() + 1 >= slot.n_ctx) {
             slot.truncated      = true;
             slot.stop           = STOP_TYPE_LIMIT;
             slot.has_next_token = false;
@@ -1983,7 +2020,7 @@ private:
         // apply context-shift if needed
         // TODO: simplify and improve
         for (server_slot & slot : slots) {
-            if (slot.state == SLOT_STATE_GENERATING && slot.prompt.n_tokens() + 1 >= slot.n_ctx) {
+            if (slot.state == SLOT_STATE_GENERATING && slot.n_sys_tokens + slot.prompt.n_tokens() + 1 >= slot.n_ctx) {
                 if (!params_base.ctx_shift) {
                     // this check is redundant (for good)
                     // we should never get here, because generation should already stopped in process_token()
@@ -2011,15 +2048,15 @@ private:
                     n_keep += 1;
                 }
 
-                n_keep = std::min(slot.n_ctx - 4, n_keep);
+                n_keep = std::max(std::min(slot.n_ctx - 4, n_keep), slot.n_sys_tokens);
 
-                const int n_left    = slot.prompt.n_tokens() - n_keep;
+                const int n_left    = slot.n_sys_tokens + slot.prompt.n_tokens() - n_keep;
                 const int n_discard = slot.task->params.n_discard ? slot.task->params.n_discard : (n_left / 2);
 
                 SLT_WRN(slot, "slot context shift, n_keep = %d, n_left = %d, n_discard = %d\n", n_keep, n_left, n_discard);
 
                 llama_memory_seq_rm (llama_get_memory(ctx), slot.id, n_keep            , n_keep + n_discard);
-                llama_memory_seq_add(llama_get_memory(ctx), slot.id, n_keep + n_discard, slot.prompt.n_tokens(), -n_discard);
+                llama_memory_seq_add(llama_get_memory(ctx), slot.id, n_keep + n_discard, slot.n_sys_tokens + slot.prompt.n_tokens(), -n_discard);
 
                 // add generated tokens to cache
                 // ref: https://github.com/ggml-org/llama.cpp/pull/16818#discussion_r2473269481
@@ -2027,11 +2064,12 @@ private:
                     GGML_ASSERT(!slot.prompt.tokens.has_mtmd);
 
                     llama_tokens new_tokens = slot.prompt.tokens.get_text_tokens(); // copy
-                    for (size_t i = n_keep + n_discard; i < new_tokens.size(); i++) {
+                    const size_t keep_idx = (size_t)(n_keep - slot.n_sys_tokens);
+                    for (size_t i = keep_idx + n_discard; i < new_tokens.size(); i++) {
                         new_tokens[i - n_discard] = new_tokens[i];
                     }
 
-                    new_tokens.resize(slot.prompt.tokens.size() - n_discard);
+                    new_tokens.resize(keep_idx + (slot.prompt.tokens.size() - keep_idx - n_discard));
 
                     slot.prompt.tokens.clear();
                     slot.prompt.tokens.insert(new_tokens);
@@ -2088,7 +2126,7 @@ private:
 
                 // add the sampled token to the batch
                 slot.i_batch_dft.push_back(batch.n_tokens);
-                common_batch_add(batch, slot.sampled, slot.prompt.tokens.pos_next(), { slot.id }, true);
+                common_batch_add(batch, slot.sampled, slot.n_sys_tokens + slot.prompt.tokens.pos_next(), { slot.id }, true);
                 slot.prompt.tokens.push_back(slot.sampled);
 
                 if (slot.task->params.speculative.n_min > (int) draft.size()) {
@@ -2104,7 +2142,7 @@ private:
                     // add all drafted tokens to the batch
                     for (size_t i = 0; i < draft.size(); i++) {
                         slot.i_batch_dft.push_back(batch.n_tokens);
-                        common_batch_add(batch, draft[i], slot.prompt.tokens.pos_next(), { slot.id }, true);
+                        common_batch_add(batch, draft[i], slot.n_sys_tokens + slot.prompt.tokens.pos_next(), { slot.id }, true);
                         slot.prompt.tokens.push_back(draft[i]);
                     }
                     slot.drafted = std::move(draft);
@@ -2113,7 +2151,7 @@ private:
                 // no speculative decoding
                 slot.i_batch = batch.n_tokens;
 
-                common_batch_add(batch, slot.sampled, slot.prompt.tokens.pos_next(), { slot.id }, true);
+                common_batch_add(batch, slot.sampled, slot.n_sys_tokens + slot.prompt.tokens.pos_next(), { slot.id }, true);
 
                 slot.prompt.tokens.push_back(slot.sampled);
 
@@ -2161,6 +2199,14 @@ private:
 
                         slot.state = SLOT_STATE_PROCESSING_PROMPT;
 
+                        // restore persistent system prompt KV cells for this slot
+                        if (llama_kv_cache_sys_prompt_exists(ctx, 0)) {
+                            llama_kv_cache_sys_prompt_restore(ctx, 0, slot.id);
+                            slot.n_sys_tokens = (int32_t)llama_kv_cache_sys_prompt_n_tokens(ctx, 0);
+                        } else {
+                            slot.n_sys_tokens = 0;
+                        }
+
                         SLT_INF(slot, "new prompt, n_ctx_slot = %d, n_keep = %d, task.n_tokens = %d\n",
                                 slot.n_ctx, slot.task->params.n_keep, slot.task->n_tokens());
 
@@ -2178,7 +2224,7 @@ private:
                         }*/
 
                         // keep track how many tokens we can reuse from the previous state
-                        int n_past = 0;
+                        int n_past = llama_kv_cache_sys_prompt_exists(ctx, 0) ? (int)llama_kv_cache_sys_prompt_n_tokens(ctx, 0) : 0;
 
                         // empty prompt passed -> release the slot and send empty response
                         if (input_tokens.empty()) {
@@ -2233,7 +2279,7 @@ private:
 
                             if (slot.task->params.cache_prompt) {
                                 // reuse any previously computed tokens that are common with the new prompt
-                                n_past = slot.prompt.tokens.get_common_prefix(input_tokens);
+                                n_past = std::max((int)slot.prompt.tokens.get_common_prefix(input_tokens), llama_kv_cache_sys_prompt_exists(ctx, 0) ? (int)llama_kv_cache_sys_prompt_n_tokens(ctx, 0) : 0);
 
                                 // if there is an alora invoked, don't cache after the invocation start
                                 if (slot.alora_invocation_start > 0) {
@@ -2302,7 +2348,7 @@ private:
                                 }
                             } else {
                                 // if we don't cache the prompt, we have to remove all previous tokens
-                                n_past = 0;
+                                n_past = llama_kv_cache_sys_prompt_exists(ctx, 0) ? (int)llama_kv_cache_sys_prompt_n_tokens(ctx, 0) : 0;
                             }
 
                             llama_pos pos_next = slot.prompt.tokens.pos_next(n_past);
@@ -2429,7 +2475,7 @@ private:
                         slot.n_prompt_tokens_cache = n_past;
                         slot.n_prompt_tokens_processed = 0;
 
-                        slot.prompt.tokens.keep_first(n_past);
+                        if (n_past <= (int)slot.prompt.tokens.size()) { slot.prompt.tokens.keep_first(n_past); }
 
                         // send initial 0% progress update if needed
                         // this is to signal the client that the request has started processing
@@ -2446,7 +2492,7 @@ private:
                     }
 
                     // truncate any tokens that are beyond n_past for this slot
-                    const llama_pos p0 = slot.prompt.tokens.pos_next();
+                    const llama_pos p0 = slot.n_sys_tokens + slot.prompt.tokens.pos_next();
 
                     SLT_INF(slot, "n_tokens = %d, memory_seq_rm [%d, end)\n", slot.prompt.n_tokens(), p0);
 
@@ -2496,7 +2542,7 @@ private:
                     if (slot.prompt.n_tokens() < slot.task->n_tokens() && input_tokens[slot.prompt.n_tokens()] == LLAMA_TOKEN_NULL) {
                         // process the image
                         size_t n_tokens_out = 0;
-                        int32_t res = input_tokens.process_chunk(ctx, mctx, slot.prompt.n_tokens(), slot.prompt.tokens.pos_next(), slot.id, n_tokens_out);
+                        int32_t res = input_tokens.process_chunk(ctx, mctx, slot.prompt.n_tokens(), slot.n_sys_tokens + slot.prompt.tokens.pos_next(), slot.id, n_tokens_out);
                         if (res != 0) {
                             SLT_ERR(slot, "failed to process image, res = %d\n", res);
                             send_error(slot, "failed to process image", ERROR_TYPE_SERVER);
@@ -2534,7 +2580,7 @@ private:
                         // embedding requires all tokens in the batch to be output
                         common_batch_add(batch,
                             cur_tok,
-                            slot.prompt.tokens.pos_next(),
+                            slot.n_sys_tokens + slot.prompt.tokens.pos_next(),
                             { slot.id },
                             slot.task->need_embd());
                         slot.prompt.tokens.push_back(cur_tok);
@@ -3489,7 +3535,7 @@ void server_routes::init_routes() {
 
         json props = {
             { "default_generation_settings", default_generation_settings_for_props },
-            { "total_slots",                 params.n_parallel },
+            { "total_slots",                 params.n_parallel - 1 },
             { "model_alias",                 meta->model_name },
             { "model_path",                  meta->model_path },
             { "modalities",                  json {
@@ -3633,6 +3679,37 @@ void server_routes::init_routes() {
             data,
             files,
             TASK_RESPONSE_TYPE_NONE); // infill is not OAI compatible
+    };
+
+    this->post_sys_prompt = [this](const server_http_req & req) {
+        auto res = create_response();
+        const json body = json::parse(req.body);
+
+        if (!body.contains("content") || !body["content"].is_string()) {
+            res->error(format_error_response("missing or invalid 'content' field", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
+        const std::string sys_text = body["content"].get<std::string>();
+        const uint32_t    id       = body.value("id", 0u);
+
+        if (ctx_server.sys_prompt_exists(id)) {
+            res->ok({{"status", "already_cached"}, {"id", id}});
+            return res;
+        }
+
+        const int result = ctx_server.sys_prompt_cache(sys_text, id);
+        if (result == -2) {
+            res->error(format_error_response("failed to decode system prompt", ERROR_TYPE_SERVER));
+            return res;
+        }
+        if (result == -3) {
+            res->error(format_error_response("failed to register system prompt", ERROR_TYPE_SERVER));
+            return res;
+        }
+
+        res->ok({{"status", "cached"}, {"id", id}, {"n_tokens", result}});
+        return res;
     };
 
     this->post_completions = [this](const server_http_req & req) {

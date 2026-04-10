@@ -5,6 +5,7 @@
 #include "llama-batch.h"
 #include "llama-io.h"
 #include "llama-memory.h"
+#include "llama-kv-cache.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
 #include "llama-ext.h"
@@ -3292,6 +3293,24 @@ bool llama_memory_can_shift(llama_memory_t mem) {
     return mem->get_can_shift();
 }
 
+bool llama_kv_cache_sys_prompt_register(struct llama_context * ctx, uint32_t id, uint32_t n_tokens) {
+    auto * kv = dynamic_cast<llama_kv_cache *>(ctx->get_memory());
+    if (!kv) return false;
+    return kv->sys_prompt_register(id, n_tokens);
+}
+
+void llama_kv_cache_sys_prompt_restore(struct llama_context * ctx, uint32_t id, int32_t slot_seq_id) {
+    auto * kv = dynamic_cast<llama_kv_cache *>(ctx->get_memory());
+    if (!kv) return;
+    kv->sys_prompt_restore(id, (llama_seq_id) slot_seq_id);
+}
+
+bool llama_kv_cache_sys_prompt_exists(struct llama_context * ctx, uint32_t id) {
+    auto * kv = dynamic_cast<llama_kv_cache *>(ctx->get_memory());
+    if (!kv) return false;
+    return kv->sys_prompt_exists(id);
+}
+
 // llama state API
 
 // deprecated
@@ -3633,4 +3652,10 @@ void llama_opt_epoch(
         idata_split,
         callback_train,
         callback_eval);
+}
+
+uint32_t llama_kv_cache_sys_prompt_n_tokens(struct llama_context * ctx, uint32_t id) {
+    auto * kv = dynamic_cast<llama_kv_cache *>(ctx->get_memory());
+    if (!kv) return 0;
+    return kv->sys_prompt_n_tokens(id);
 }

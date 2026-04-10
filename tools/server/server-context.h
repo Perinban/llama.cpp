@@ -100,6 +100,7 @@ struct server_routes {
     server_http_context::handler_t post_props;
     server_http_context::handler_t get_api_show;
     server_http_context::handler_t post_infill;
+    server_http_context::handler_t post_sys_prompt;
     server_http_context::handler_t post_completions;
     server_http_context::handler_t post_completions_oai;
     server_http_context::handler_t post_chat_completions;
@@ -131,7 +132,7 @@ private:
     std::unique_ptr<const server_context_meta> meta;
 
     const common_params & params;
-    const server_context_impl & ctx_server;
+    server_context_impl & ctx_server;
 
     server_queue & queue_tasks;
     server_response & queue_results;
