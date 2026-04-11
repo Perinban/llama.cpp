@@ -14,6 +14,14 @@
 #include <map>
 #include <stdexcept>
 
+#if defined(__APPLE__) || defined(__linux__) || defined(__unix__)
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <unistd.h>
+#elif defined(_WIN32)
+#include <windows.h>
+#endif
+
 //
 // llama_kv_cache
 //
@@ -31,7 +39,8 @@ llama_kv_cache::llama_kv_cache(
                  uint32_t   n_swa,
            llama_swa_type   swa_type,
     const layer_filter_cb & filter,
-    const  layer_reuse_cb & reuse) :
+    const  layer_reuse_cb & reuse,
+    const char *        kv_mmap_path) :
     model(model), hparams(model.hparams), v_trans(v_trans),
     n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type) {
 
@@ -188,7 +197,102 @@ llama_kv_cache::llama_kv_cache(
                 t->buffer = buf; // set dummy buffer for KV cache so that the backend scheduler won't try to allocate it
             }
         } else {
-            buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), buft); // real buffer
+#if defined(__APPLE__) || defined(__linux__) || defined(__unix__)
+            if (kv_mmap_path && buft == ggml_backend_cpu_buffer_type()) {
+                // calculate total size matching ggml_backend_alloc_ctx_tensors_from_buft exactly
+                const size_t alignment = ggml_backend_buft_get_alignment(buft);
+                size_t total_size = 0;
+                for (ggml_tensor * t = ggml_get_first_tensor(ctx.get()); t != nullptr; t = ggml_get_next_tensor(ctx.get(), t)) {
+                    if (t->data == nullptr && t->view_src == nullptr) {
+                        total_size += GGML_PAD(ggml_backend_buft_get_alloc_size(buft, t), alignment);
+                    }
+                }
+                int fd = open(kv_mmap_path, O_RDWR | O_CREAT, 0644);
+                if (fd < 0) {
+                    throw std::runtime_error("failed to open kv mmap file");
+                }
+                if (ftruncate(fd, total_size) < 0) {
+                    close(fd);
+                    throw std::runtime_error("failed to resize kv mmap file");
+                }
+                void * ptr = mmap(nullptr, total_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+                close(fd);
+                if (ptr == MAP_FAILED) {
+                    throw std::runtime_error("failed to mmap kv cache file");
+                }
+                madvise(ptr, total_size, MADV_RANDOM);
+                kv_mmap_ptr  = ptr;
+                kv_mmap_size = total_size;
+                buf = ggml_backend_cpu_buffer_from_ptr(ptr, total_size);
+                // assign tensor->data pointers into the mmap region
+                // must match ggml_backend_alloc_ctx_tensors_from_buft exactly
+                size_t offset = 0;
+                for (ggml_tensor * t = ggml_get_first_tensor(ctx.get()); t != nullptr; t = ggml_get_next_tensor(ctx.get(), t)) {
+                    if (t->view_src != nullptr) {
+                        // view tensor: resolve data from parent
+                        ggml_backend_view_init(t);
+                    } else if (t->data == nullptr) {
+                        // normal tensor: assign into mmap region
+                        size_t t_size = GGML_PAD(ggml_backend_buft_get_alloc_size(buft, t), alignment);
+                        ggml_backend_tensor_alloc(buf, t, (char *)ptr + offset);
+                        offset += t_size;
+                    }
+                }
+            } else {
+                buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), buft);
+            }
+#elif defined(_WIN32)
+            if (kv_mmap_path && buft == ggml_backend_cpu_buffer_type()) {
+                const size_t alignment = ggml_backend_buft_get_alignment(buft);
+                size_t total_size = 0;
+                for (ggml_tensor * t = ggml_get_first_tensor(ctx.get()); t != nullptr; t = ggml_get_next_tensor(ctx.get(), t)) {
+                    if (t->data == nullptr && t->view_src == nullptr) {
+                        total_size += GGML_PAD(ggml_backend_buft_get_alloc_size(buft, t), alignment);
+                    }
+                }
+                HANDLE hFile = CreateFileA(kv_mmap_path, GENERIC_READ | GENERIC_WRITE,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+                if (hFile == INVALID_HANDLE_VALUE) {
+                    throw std::runtime_error("failed to open kv mmap file (win32)");
+                }
+                LARGE_INTEGER li;
+                li.QuadPart = (LONGLONG)total_size;
+                if (!SetFilePointerEx(hFile, li, NULL, FILE_BEGIN) || !SetEndOfFile(hFile)) {
+                    CloseHandle(hFile);
+                    throw std::runtime_error("failed to resize kv mmap file (win32)");
+                }
+                HANDLE hMapping = CreateFileMappingA(hFile, NULL, PAGE_READWRITE, 0, 0, NULL);
+                CloseHandle(hFile);
+                if (hMapping == NULL) {
+                    throw std::runtime_error("failed to create file mapping (win32)");
+                }
+                void * ptr = MapViewOfFile(hMapping, FILE_MAP_WRITE, 0, 0, 0);
+                if (ptr == NULL) {
+                    CloseHandle(hMapping);
+                    throw std::runtime_error("failed to map view of file (win32)");
+                }
+                kv_mmap_ptr    = ptr;
+                kv_mmap_size   = total_size;
+                kv_mmap_handle = hMapping;
+                buf = ggml_backend_cpu_buffer_from_ptr(ptr, total_size);
+                size_t offset = 0;
+                for (ggml_tensor * t = ggml_get_first_tensor(ctx.get()); t != nullptr; t = ggml_get_next_tensor(ctx.get(), t)) {
+                    if (t->view_src != nullptr) {
+                        ggml_backend_view_init(t);
+                    } else if (t->data == nullptr) {
+                        size_t t_size = GGML_PAD(ggml_backend_buft_get_alloc_size(buft, t), alignment);
+                        ggml_backend_tensor_alloc(buf, t, (char *)ptr + offset);
+                        offset += t_size;
+                    }
+                }
+            } else {
+                buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), buft);
+            }
+#else
+            // kv_mmap_path not supported on this platform, fallback to malloc
+            LLAMA_LOG_WARN("warning: --kv-mmap-path not supported on this platform, using malloc\n");
+            buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), buft);
+#endif
         }
         if (!buf) {
             throw std::runtime_error("failed to allocate buffer for kv cache");
@@ -212,6 +316,22 @@ llama_kv_cache::llama_kv_cache(
 
     const char * LLAMA_KV_CACHE_DEBUG = getenv("LLAMA_KV_CACHE_DEBUG");
     debug = LLAMA_KV_CACHE_DEBUG ? atoi(LLAMA_KV_CACHE_DEBUG) : 0;
+}
+
+llama_kv_cache::~llama_kv_cache() {
+    if (kv_mmap_ptr) {
+#if defined(__APPLE__) || defined(__linux__) || defined(__unix__)
+        munmap(kv_mmap_ptr, kv_mmap_size);
+#elif defined(_WIN32)
+        UnmapViewOfFile(kv_mmap_ptr);
+        if (kv_mmap_handle) {
+            CloseHandle(kv_mmap_handle);
+            kv_mmap_handle = nullptr;
+        }
+#endif
+        kv_mmap_ptr  = nullptr;
+        kv_mmap_size = 0;
+    }
 }
 
 void llama_kv_cache::clear(bool data) {
@@ -2243,6 +2363,21 @@ const llama_ubatch & llama_kv_cache_context::get_ubatch() const {
     assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
 
     return ubatches[i_cur];
+}
+
+void llama_kv_cache_context::prefetch_next() {
+    if (!kv || !kv->kv_mmap_ptr) {
+        return;
+    }
+#if defined(__APPLE__) || defined(__linux__) || defined(__unix__)
+    // prefetch all KV pages for the next ubatch while current one executes
+    madvise(kv->kv_mmap_ptr, kv->kv_mmap_size, MADV_WILLNEED);
+#elif defined(_WIN32)
+    WIN32_MEMORY_RANGE_ENTRY range;
+    range.VirtualAddress = kv->kv_mmap_ptr;
+    range.NumberOfBytes  = (SIZE_T) kv->kv_mmap_size;
+    PrefetchVirtualMemory(GetCurrentProcess(), 1, &range, 0);
+#endif
 }
 
 uint32_t llama_kv_cache_context::get_n_kv() const {

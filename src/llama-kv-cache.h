@@ -106,9 +106,10 @@ public:
                      uint32_t   n_swa,
                llama_swa_type   swa_type,
         const layer_filter_cb & filter,
-        const  layer_reuse_cb & reuse);
+        const  layer_reuse_cb & reuse,
+        const char *        kv_mmap_path = nullptr);
 
-    ~llama_kv_cache() = default;
+    ~llama_kv_cache();
 
     //
     // llama_memory_i
@@ -235,6 +236,15 @@ private:
     // env: LLAMA_KV_CACHE_DEBUG
     int debug = 0;
 
+    // mmap-backed KV cache state
+    void * kv_mmap_ptr  = nullptr;
+    size_t kv_mmap_size = 0;
+#if defined(_WIN32)
+    void * kv_mmap_handle = nullptr;
+#endif
+
+    friend class llama_kv_cache_context;
+
     // this is the SWA type of the cache - not to be confused with the model SWA type
     const llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
 
@@ -334,6 +344,7 @@ public:
 
     llama_memory_status  get_status() const override;
     const llama_ubatch & get_ubatch() const override;
+    void prefetch_next() override;
 
     //
     // llama_kv_cache_context specific API

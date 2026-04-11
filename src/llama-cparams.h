@@ -26,6 +26,8 @@ struct llama_cparams {
     float yarn_beta_fast;
     float yarn_beta_slow;
 
+    const char * kv_mmap_path; // path to file-backed mmap KV cache (NULL = disabled)
+
     bool embeddings;
     bool causal_attn;
     bool offload_kqv;

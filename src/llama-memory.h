@@ -59,6 +59,9 @@ struct llama_memory_context_i {
 
     // get the status of the memory context - used for error handling and checking if any updates would be applied
     virtual llama_memory_status get_status() const = 0;
+
+    // prefetch KV pages for the next ubatch (mmap-backed KV cache only, no-op otherwise)
+    virtual void prefetch_next() {}
 };
 
 using llama_memory_context_ptr = std::unique_ptr<llama_memory_context_i>;

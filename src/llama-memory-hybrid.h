@@ -38,7 +38,8 @@ public:
                      bool   unified,
                             /* layer filters */
     const layer_filter_cb & filter_attn = nullptr,
-    const layer_filter_cb & filter_recr = nullptr);
+    const layer_filter_cb & filter_recr = nullptr,
+    const char *        kv_mmap_path     = nullptr);
 
     ~llama_memory_hybrid() = default;
 
