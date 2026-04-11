@@ -533,6 +533,9 @@ struct common_params {
     std::string kv_mmap_path   = "";   // path to file-backed mmap KV cache (empty = disabled)
 
     bool input_prefix_bos  = false; // prefix BOS to user inputs, preceding input_prefix
+#if defined(__APPLE__) || defined(__linux__) || defined(__unix__)
+    int  ready_fd          = -1;  // fd to write a byte to when server is ready
+#endif
     bool use_mmap          = true;  // enable mmap to use filesystem cache
     bool lazy_mmap         = false; // skip prefetch, let OS page on demand
     bool use_direct_io     = false; // read from disk without buffering

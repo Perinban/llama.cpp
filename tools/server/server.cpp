@@ -237,6 +237,16 @@ int main(int argc, char ** argv) {
         }
         ctx_http.is_ready.store(true);
 
+#if defined(__APPLE__) || defined(__linux__) || defined(__unix__)
+        // notify parent process via ready-fd if provided
+        if (params.ready_fd >= 0) {
+            char byte = 1;
+            write(params.ready_fd, &byte, 1);
+            close(params.ready_fd);
+            params.ready_fd = -1;
+        }
+#endif
+
         shutdown_handler = [&](int) {
             ctx_http.stop();
         };
@@ -271,6 +281,16 @@ int main(int argc, char ** argv) {
 
         routes.update_meta(ctx_server);
         ctx_http.is_ready.store(true);
+
+#if defined(__APPLE__) || defined(__linux__) || defined(__unix__)
+        // notify parent process via ready-fd if provided
+        if (params.ready_fd >= 0) {
+            char byte = 1;
+            write(params.ready_fd, &byte, 1);
+            close(params.ready_fd);
+            params.ready_fd = -1;
+        }
+#endif
 
         LOG_INF("%s: model loaded\n", __func__);
 

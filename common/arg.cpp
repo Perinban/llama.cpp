@@ -2820,6 +2820,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.hostname = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_HOST"));
+#if defined(__APPLE__) || defined(__linux__) || defined(__unix__)
+    add_opt(common_arg(
+        {"--ready-fd"}, "FD",
+        "file descriptor to write a byte to when server is ready",
+        [](common_params & params, int value) {
+            params.ready_fd = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+#endif
     add_opt(common_arg(
         {"--port"}, "PORT",
         string_format("port to listen (default: %d)", params.port),
