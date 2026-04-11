@@ -198,9 +198,9 @@ llama_kv_cache::llama_kv_cache(
             }
         } else {
 #if defined(__APPLE__) || defined(__linux__) || defined(__unix__)
-            if (kv_mmap_path && buft == ggml_backend_cpu_buffer_type()) {
+            if (kv_mmap_path) {
                 // calculate total size matching ggml_backend_alloc_ctx_tensors_from_buft exactly
-                const size_t alignment = ggml_backend_buft_get_alignment(buft);
+                const size_t alignment = ggml_backend_buft_get_alignment(ggml_backend_cpu_buffer_type());
                 size_t total_size = 0;
                 for (ggml_tensor * t = ggml_get_first_tensor(ctx.get()); t != nullptr; t = ggml_get_next_tensor(ctx.get(), t)) {
                     if (t->data == nullptr && t->view_src == nullptr) {
@@ -223,7 +223,12 @@ llama_kv_cache::llama_kv_cache(
                 madvise(ptr, total_size, MADV_RANDOM);
                 kv_mmap_ptr  = ptr;
                 kv_mmap_size = total_size;
-                buf = ggml_backend_cpu_buffer_from_ptr(ptr, total_size);
+                auto * dev = ggml_backend_buft_get_device(buft);
+                if (dev && buft != ggml_backend_cpu_buffer_type()) {
+                    buf = ggml_backend_dev_buffer_from_host_ptr(dev, ptr, total_size, total_size);
+                } else {
+                    buf = ggml_backend_cpu_buffer_from_ptr(ptr, total_size);
+                }
                 // assign tensor->data pointers into the mmap region
                 // must match ggml_backend_alloc_ctx_tensors_from_buft exactly
                 size_t offset = 0;
@@ -242,8 +247,8 @@ llama_kv_cache::llama_kv_cache(
                 buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), buft);
             }
 #elif defined(_WIN32)
-            if (kv_mmap_path && buft == ggml_backend_cpu_buffer_type()) {
-                const size_t alignment = ggml_backend_buft_get_alignment(buft);
+            if (kv_mmap_path) {
+                const size_t alignment = ggml_backend_buft_get_alignment(ggml_backend_cpu_buffer_type());
                 size_t total_size = 0;
                 for (ggml_tensor * t = ggml_get_first_tensor(ctx.get()); t != nullptr; t = ggml_get_next_tensor(ctx.get(), t)) {
                     if (t->data == nullptr && t->view_src == nullptr) {
@@ -274,7 +279,12 @@ llama_kv_cache::llama_kv_cache(
                 kv_mmap_ptr    = ptr;
                 kv_mmap_size   = total_size;
                 kv_mmap_handle = hMapping;
-                buf = ggml_backend_cpu_buffer_from_ptr(ptr, total_size);
+                auto * dev = ggml_backend_buft_get_device(buft);
+                if (dev && dev->iface.buffer_from_host_ptr) {
+                    buf = ggml_backend_dev_buffer_from_host_ptr(dev, ptr, total_size, total_size);
+                } else {
+                    buf = ggml_backend_cpu_buffer_from_ptr(ptr, total_size);
+                }
                 size_t offset = 0;
                 for (ggml_tensor * t = ggml_get_first_tensor(ctx.get()); t != nullptr; t = ggml_get_next_tensor(ctx.get(), t)) {
                     if (t->view_src != nullptr) {
