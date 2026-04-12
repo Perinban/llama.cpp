@@ -2290,7 +2290,7 @@ private:
 
                             if (slot.task->params.cache_prompt) {
                                 // reuse any previously computed tokens that are common with the new prompt
-                                n_past = std::max((int)slot.prompt.tokens.get_common_prefix(input_tokens), llama_kv_cache_sys_prompt_exists(ctx, slot.sys_prompt_id) ? (int)llama_kv_cache_sys_prompt_n_tokens(ctx, slot.sys_prompt_id) : 0);
+                                n_past = slot.prompt.tokens.get_common_prefix(input_tokens);
 
                                 // if there is an alora invoked, don't cache after the invocation start
                                 if (slot.alora_invocation_start > 0) {
