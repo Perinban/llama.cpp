@@ -2481,6 +2481,9 @@ void llama_kv_cache::sys_prompt_restore(uint32_t id, llama_seq_id slot_seq_id) {
     seq_cp((llama_seq_id)(n_seq_max - 1), slot_seq_id, (llama_pos) offset, (llama_pos)(offset + n_tokens));
 
 
+    if (n_stream > 1) {
+        v_heads[seq_to_stream[slot_seq_id]] = offset + n_tokens;
+    }
 }
 
 bool llama_kv_cache::sys_prompt_exists(uint32_t id) const {
