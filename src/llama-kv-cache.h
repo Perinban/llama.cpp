@@ -149,6 +149,7 @@ public:
     bool sys_prompt_exists   (uint32_t id) const;
     uint32_t sys_prompt_n_tokens(uint32_t id) const;
     uint32_t sys_prompt_offset    (uint32_t id) const;
+    uint32_t sys_prompt_next_offset() const;
 
     //
     // llama_kv_cache specific API

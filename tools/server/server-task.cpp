@@ -743,7 +743,7 @@ json server_task_result_cmpl_final::to_json_non_oaicompat() {
         {"tokens_predicted",    n_decoded},
         {"tokens_evaluated",    n_prompt_tokens},
         {"tokens_sys",          n_sys_tokens},
-        {"tokens_input",        n_prompt_tokens - n_sys_tokens},
+        {"tokens_input",        n_prompt_tokens},
         {"tokens_output",       n_decoded},
         {"generation_settings", generation_params.to_json()},
         {"prompt",              prompt},

@@ -1007,6 +1007,13 @@ json oaicompat_chat_params_parse(
 
     common_chat_templates_inputs inputs;
     inputs.messages              = common_chat_msgs_parse_oaicompat(messages);
+    if (json_value(body, "sys_prompt_id", (uint32_t)0) > 0) {
+        inputs.messages.erase(
+            std::remove_if(inputs.messages.begin(), inputs.messages.end(),
+                [](const common_chat_msg & m) { return m.role == "system"; }),
+            inputs.messages.end());
+    }
+
     inputs.tools                 = common_chat_tools_parse_oaicompat(tools);
     inputs.tool_choice           = common_chat_tool_choice_parse_oaicompat(tool_choice);
     inputs.json_schema           = json_schema.is_null() ? "" : json_schema.dump();

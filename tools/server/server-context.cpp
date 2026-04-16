@@ -550,16 +550,13 @@ public:
         const auto sys_tokens = common_tokenize(ctx, text, false, true);
         const uint32_t n_sys  = (uint32_t) sys_tokens.size();
 
-        uint32_t next_offset = 0;
-        for (uint32_t probe = 0; probe < id; ++probe) {
-            if (llama_kv_cache_sys_prompt_exists(ctx, probe)) {
-                next_offset = llama_kv_cache_sys_prompt_offset(ctx, probe) + llama_kv_cache_sys_prompt_n_tokens(ctx, probe);
-            }
-        }
+        uint32_t next_offset = llama_kv_cache_sys_prompt_next_offset(ctx);
+
+        llama_memory_seq_rm(llama_get_memory(ctx), (llama_seq_id)(llama_n_seq_max(ctx) - 1), (llama_pos)next_offset, -1);
 
         common_batch_clear(batch);
         for (uint32_t i = 0; i < n_sys; i++) {
-            common_batch_add(batch, sys_tokens[i], (llama_pos)(next_offset + i), {(llama_seq_id)(llama_n_seq_max(ctx) - 1)}, false);
+            common_batch_add(batch, sys_tokens[i], (llama_pos)(next_offset + i), {(llama_seq_id)(llama_n_seq_max(ctx) - 1)}, i == n_sys - 1);
         }
 
         if (llama_decode(ctx, batch) != 0) {
@@ -670,6 +667,7 @@ private:
 
         params_base = params;
         params_base.n_parallel += 1;
+        params_base.kv_unified = true;
         if (params_base.n_parallel > 1 && params_base.n_ctx > 0) { params_base.n_ctx = (params_base.n_ctx / (params_base.n_parallel - 1)) * params_base.n_parallel; }
 
         llama_init = common_init_from_params(params_base);
@@ -992,6 +990,11 @@ private:
                     continue;
                 }
 
+                // skip the slot if it has a different sys_prompt_id (only if slot has been used)
+                if (slot.sys_prompt_id != 0 && slot.sys_prompt_id != task.params.sys_prompt_id) {
+                    continue;
+                }
+
                 const auto & tokens = slot.prompt.tokens;
 
                 // skip the slot if it does not contains cached tokens
@@ -1030,6 +1033,11 @@ private:
             for (server_slot & slot : slots) {
                 // skip the slot if it is not available
                 if (slot.is_processing()) {
+                    continue;
+                }
+
+                // skip the slot if it has a different sys_prompt_id (only if slot has been used)
+                if (slot.sys_prompt_id != 0 && slot.sys_prompt_id != task.params.sys_prompt_id) {
                     continue;
                 }
 
@@ -1801,6 +1809,7 @@ private:
                     int n_processing_slots = 0;
 
                     for (server_slot & slot : slots) {
+                        if ((llama_seq_id)slot.id == (llama_seq_id)(llama_n_seq_max(ctx) - 1)) continue;
                         json slot_data = slot.to_json(slots_debug == 0);
 
                         if (slot.is_processing()) {
@@ -2211,6 +2220,8 @@ private:
 
                         // restore persistent system prompt KV cells for this slot
                         slot.sys_prompt_id = slot.task->params.sys_prompt_id;
+                        slot.prompt_clear(true);
+                        slot.n_prompt_tokens_cache = 0;
                         if (llama_kv_cache_sys_prompt_exists(ctx, slot.sys_prompt_id)) {
                             llama_kv_cache_sys_prompt_restore(ctx, slot.sys_prompt_id, slot.id);
                             slot.n_sys_tokens = (int32_t)(llama_kv_cache_sys_prompt_offset(ctx, slot.sys_prompt_id) + llama_kv_cache_sys_prompt_n_tokens(ctx, slot.sys_prompt_id));
@@ -2235,7 +2246,7 @@ private:
                         }*/
 
                         // keep track how many tokens we can reuse from the previous state
-                        int n_past = llama_kv_cache_sys_prompt_exists(ctx, slot.sys_prompt_id) ? (int)llama_kv_cache_sys_prompt_n_tokens(ctx, slot.sys_prompt_id) : 0;
+                        int n_past = slot.n_sys_tokens;
 
                         // empty prompt passed -> release the slot and send empty response
                         if (input_tokens.empty()) {
@@ -2359,7 +2370,7 @@ private:
                                 }
                             } else {
                                 // if we don't cache the prompt, we have to remove all previous tokens
-                                n_past = llama_kv_cache_sys_prompt_exists(ctx, slot.sys_prompt_id) ? (int)llama_kv_cache_sys_prompt_n_tokens(ctx, slot.sys_prompt_id) : 0;
+                                n_past = slot.n_sys_tokens; // relative space, sys tokens handled via n_sys_tokens
                             }
 
                             llama_pos pos_next = slot.prompt.tokens.pos_next(n_past);
@@ -2483,10 +2494,12 @@ private:
                             SLT_WRN(slot, "n_past was set to %d\n", n_past);
                         }
 
+                        if (n_past <= (int)slot.prompt.tokens.size()) { slot.prompt.tokens.keep_first(n_past); }
+
                         slot.n_prompt_tokens_cache = n_past;
+
                         slot.n_prompt_tokens_processed = 0;
 
-                        if (n_past <= (int)slot.prompt.tokens.size()) { slot.prompt.tokens.keep_first(n_past); }
 
                         // send initial 0% progress update if needed
                         // this is to signal the client that the request has started processing

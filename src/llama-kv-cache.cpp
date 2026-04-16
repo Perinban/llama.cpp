@@ -2440,6 +2440,14 @@ void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama
 
 // sys_prompt registry
 
+uint32_t llama_kv_cache::sys_prompt_next_offset() const {
+    uint32_t next = 0;
+    for (const auto & kv : sys_prompt_registry) {
+        next = std::max(next, kv.second.offset + kv.second.n_tokens);
+    }
+    return next;
+}
+
 bool llama_kv_cache::sys_prompt_register(uint32_t id, uint32_t n_tokens) {
     if (n_swa > 0)                              return false;
     if (swa_type != LLAMA_SWA_TYPE_NONE)        return false;
@@ -2448,7 +2456,8 @@ bool llama_kv_cache::sys_prompt_register(uint32_t id, uint32_t n_tokens) {
     auto & cells = v_cells[0];
 
     uint32_t next_offset = 0;
-    for (auto & [k, v] : sys_prompt_registry) {
+    for (const auto & kv : sys_prompt_registry) {
+        const auto & v = kv.second;
         next_offset = std::max(next_offset, v.offset + v.n_tokens);
     }
 
@@ -2471,7 +2480,7 @@ void llama_kv_cache::sys_prompt_restore(uint32_t id, llama_seq_id slot_seq_id) {
 
     seq_cp((llama_seq_id)(n_seq_max - 1), slot_seq_id, (llama_pos) offset, (llama_pos)(offset + n_tokens));
 
-    v_heads[seq_to_stream[slot_seq_id]] = offset + n_tokens;
+
 }
 
 bool llama_kv_cache::sys_prompt_exists(uint32_t id) const {
