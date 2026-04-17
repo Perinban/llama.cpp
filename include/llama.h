@@ -367,7 +367,8 @@ extern "C" {
         ggml_abort_callback abort_callback;
         void *              abort_callback_data;
 
-        const char * kv_mmap_path; // path to file-backed mmap KV cache (NULL = disabled, CPU-only)
+        const char * kv_mmap_path; // path to file-backed mmap KV cache (NULL = disabled)
+        uint32_t     kv_mmap_size_mult; // KV cache size multiplier when using mmap (1 = n_ctx_seq)
 
         // Keep the booleans together and at the end of the struct to avoid misalignment during copy-by-value.
         bool embeddings;  // if true, extract embeddings (together with logits)
@@ -538,6 +539,7 @@ extern "C" {
     //       ref: https://github.com/ggml-org/llama.cpp/pull/17046#discussion_r2503085732
     LLAMA_API uint32_t llama_n_ctx      (const struct llama_context * ctx);
     LLAMA_API uint32_t llama_n_ctx_seq  (const struct llama_context * ctx);
+LLAMA_API uint32_t llama_n_kv_size   (const struct llama_context * ctx); // actual KV tensor size (n_ctx_seq * kv_mmap_size_mult)
     LLAMA_API uint32_t llama_n_batch    (const struct llama_context * ctx);
     LLAMA_API uint32_t llama_n_ubatch   (const struct llama_context * ctx);
     LLAMA_API uint32_t llama_n_seq_max  (const struct llama_context * ctx);

@@ -839,7 +839,7 @@ private:
 
         const int n_ctx_train = llama_model_n_ctx_train(model);
 
-        int n_ctx_slot = llama_n_ctx_seq(ctx);
+        int n_ctx_slot = llama_n_kv_size(ctx);
         if (n_ctx_slot > n_ctx_train) {
             SRV_WRN("the slot context (%d) exceeds the training context of the model (%d) - capping\n", n_ctx_slot, n_ctx_train);
             n_ctx_slot = n_ctx_train;
@@ -1117,6 +1117,9 @@ private:
 
             // don't update the cache if the slot's context is empty
             update_cache = update_cache && tokens.size() > 0;
+
+            // in unified KV mode, all slots share one stream - serializing KV state is redundant and slow
+            update_cache = update_cache && !params_base.kv_unified;
 
             if (update_cache) {
                 SRV_WRN("%s", "updating prompt cache\n");

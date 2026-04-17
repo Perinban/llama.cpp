@@ -49,7 +49,8 @@ llama_context::llama_context(
     cparams.yarn_beta_slow   = params.yarn_beta_slow   >= 0.0f ? params.yarn_beta_slow   : hparams.yarn_beta_slow;
     cparams.embeddings       = params.embeddings;
     cparams.offload_kqv      = params.offload_kqv;
-    cparams.kv_mmap_path     = params.kv_mmap_path;
+    cparams.kv_mmap_path      = params.kv_mmap_path;
+    cparams.kv_mmap_size_mult = params.kv_mmap_size_mult;
     cparams.no_perf          = params.no_perf;
     cparams.pooling_type     = params.pooling_type;
     cparams.warmup           = false;
@@ -690,6 +691,10 @@ uint32_t llama_context::n_ctx() const {
 
 uint32_t llama_context::n_ctx_seq() const {
     return cparams.n_ctx_seq;
+}
+
+uint32_t llama_context::n_kv_size() const {
+    return cparams.n_ctx_seq * cparams.kv_mmap_size_mult;
 }
 
 uint32_t llama_context::n_batch() const {
@@ -2931,6 +2936,7 @@ llama_context_params llama_context_default_params() {
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
         /*.kv_mmap_path                =*/ nullptr,
+        /*.kv_mmap_size_mult            =*/ 1,
         /*.embeddings                  =*/ false,
         /*.offload_kqv                 =*/ true,
         /*.no_perf                     =*/ true,
@@ -3028,6 +3034,10 @@ uint32_t llama_n_ctx(const llama_context * ctx) {
 
 uint32_t llama_n_ctx_seq(const llama_context * ctx) {
     return ctx->n_ctx_seq();
+}
+
+uint32_t llama_n_kv_size(const llama_context * ctx) {
+    return ctx->n_kv_size();
 }
 
 uint32_t llama_n_batch(const llama_context * ctx) {

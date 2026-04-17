@@ -7702,6 +7702,12 @@ void llama_model::release_layer(int il) const {
     if (first == SIZE_MAX || last == 0) return;
 #if defined(_POSIX_MAPPED_FILES)
     for (const auto & mapping : pimpl->mappings) {
+        if (il < (int)pimpl->dev_layer.size()) {
+            auto * dev = pimpl->dev_layer[il].dev;
+            if (dev && ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+                continue;
+            }
+        }
         posix_madvise((uint8_t *)mapping->addr() + first, last - first, POSIX_MADV_DONTNEED);
     }
 #endif
@@ -8195,7 +8201,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 !cparams.flash_attn,
                                 cparams.offload_kqv,
                                 cparams.kv_unified,
-                                cparams.n_ctx_seq,
+                                cparams.n_ctx_seq * (cparams.kv_mmap_path ? cparams.kv_mmap_size_mult : 1),
                                 cparams.n_seq_max,
                                 1,
                                 hparams.n_swa,

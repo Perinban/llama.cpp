@@ -383,7 +383,10 @@ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
             }
 
 
-        if (cells.is_persistent(i)) { continue; }
+        if (cells.is_persistent(i)) {
+                if (cells.seq_has(i, seq_id)) { cells.seq_rm(i, seq_id); }
+                continue;
+            }
             if (cells.seq_has(i, seq_id) && cells.seq_rm(i, seq_id)) {
                 if (new_head == cells.size()) {
                     new_head = i;
@@ -1805,7 +1808,8 @@ void llama_kv_cache::state_write(llama_io_write_i & io, llama_seq_id seq_id, lla
         uint32_t cell_range_begin = cells.size();
 
         for (uint32_t i = 0; i < cells.size(); ++i) {
-            if (!cells.is_empty(i) && (seq_id == -1 || cells.seq_has(i, seq_id))) {
+            const bool is_sys = seq_id >= 0 && cells.seq_has(i, (llama_seq_id)(n_seq_max - 1));
+            if (!cells.is_empty(i) && !is_sys && (seq_id == -1 || cells.seq_has(i, seq_id))) {
                 ++cell_count;
                 if (cell_range_begin == cells.size()) {
                     cell_range_begin = i;
@@ -2379,17 +2383,45 @@ const llama_ubatch & llama_kv_cache_context::get_ubatch() const {
 }
 
 void llama_kv_cache_context::prefetch_next() {
+#if defined(__APPLE__) || defined(__linux__) || defined(__unix__)
     if (!kv || !kv->kv_mmap_ptr) {
         return;
     }
-#if defined(__APPLE__) || defined(__linux__) || defined(__unix__)
-    // prefetch all KV pages for the next ubatch while current one executes
-    madvise(kv->kv_mmap_ptr, kv->kv_mmap_size, MADV_WILLNEED);
-#elif defined(_WIN32)
-    WIN32_MEMORY_RANGE_ENTRY range;
-    range.VirtualAddress = kv->kv_mmap_ptr;
-    range.NumberOfBytes  = (SIZE_T) kv->kv_mmap_size;
-    PrefetchVirtualMemory(GetCurrentProcess(), 1, &range, 0);
+    const size_t next = i_cur + 1;
+    if (next < ubatches.size()) {
+        const auto & sinfo = sinfos[next];
+        if (sinfo.is_contiguous()) {
+            const uint32_t slot  = sinfo.head();
+            const uint32_t count = (uint32_t)sinfo.size();
+            for (auto & layer : kv->layers) {
+                if (layer.k) {
+                    madvise((char*)layer.k->data + slot * layer.k->nb[1],
+                            count * layer.k->nb[1], MADV_WILLNEED);
+                }
+                if (layer.v) {
+                    madvise((char*)layer.v->data + slot * layer.v->nb[1],
+                            count * layer.v->nb[1], MADV_WILLNEED);
+                }
+            }
+        }
+    }
+    if (i_cur > 0) {
+        const auto & sinfo = sinfos[i_cur - 1];
+        if (sinfo.is_contiguous()) {
+            const uint32_t slot  = sinfo.head();
+            const uint32_t count = (uint32_t)sinfo.size();
+            for (auto & layer : kv->layers) {
+                if (layer.k) {
+                    madvise((char*)layer.k->data + slot * layer.k->nb[1],
+                            count * layer.k->nb[1], MADV_DONTNEED);
+                }
+                if (layer.v) {
+                    madvise((char*)layer.v->data + slot * layer.v->nb[1],
+                            count * layer.v->nb[1], MADV_DONTNEED);
+                }
+            }
+        }
+    }
 #endif
 }
 

@@ -1322,6 +1322,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
+        {"--kv-mmap-size-mult"}, "N",
+        "KV cache size multiplier when using --kv-mmap-path (default: 1, e.g. 4 = 4x n_ctx on disk)",
+        [](common_params & params, int value) {
+            params.kv_mmap_size_mult = (uint32_t) std::max(1, value);
+        }
+    ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"--context-shift"},
         {"--no-context-shift"},
         string_format("whether to use context shift on infinite text generation (default: %s)", params.ctx_shift ? "enabled" : "disabled"),

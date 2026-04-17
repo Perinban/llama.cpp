@@ -27,6 +27,7 @@ struct llama_cparams {
     float yarn_beta_slow;
 
     const char * kv_mmap_path; // path to file-backed mmap KV cache (NULL = disabled)
+    uint32_t     kv_mmap_size_mult = 1; // KV cache size multiplier when using mmap (1 = n_ctx_seq, N = N*n_ctx_seq)
 
     bool embeddings;
     bool causal_attn;

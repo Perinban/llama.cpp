@@ -531,6 +531,7 @@ struct common_params {
     bool swa_full          = false; // use full-size SWA cache (https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)
     bool kv_unified        = false; // enable unified KV cache
     std::string kv_mmap_path   = "";   // path to file-backed mmap KV cache (empty = disabled)
+    uint32_t    kv_mmap_size_mult = 1;    // KV cache size multiplier when using mmap
 
     bool input_prefix_bos  = false; // prefix BOS to user inputs, preceding input_prefix
 #if defined(__APPLE__) || defined(__linux__) || defined(__unix__)
