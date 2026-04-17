@@ -170,6 +170,7 @@ struct server_slot {
         SLT_DBG(*this, "%s", "\n");
 
         n_prompt_tokens_cache = 0;
+        sys_prompt_id = 0;
 
         last_nl_pos    = 0;
         generated_text = "";
@@ -569,6 +570,57 @@ public:
 
         SRV_INF("system prompt cached: id=%u, n_tokens=%u\n", id, n_sys);
         return (int) n_sys;
+    }
+
+
+    std::vector<std::pair<uint32_t,int>> sys_prompt_cache_bulk(const json & items) {
+        struct entry { uint32_t id; std::vector<llama_token> tokens; uint32_t offset; };
+        std::vector<entry> entries;
+        uint32_t next_offset = llama_kv_cache_sys_prompt_next_offset(ctx);
+        for (const auto & item : items) {
+            const uint32_t id   = item.value("id", 0u);
+            const std::string t = item["content"].get<std::string>();
+            if (llama_kv_cache_sys_prompt_exists(ctx, id)) continue;
+            auto toks = common_tokenize(ctx, t, false, true);
+            entries.push_back({id, std::move(toks), next_offset});
+            next_offset += (uint32_t) entries.back().tokens.size();
+        }
+        if (entries.empty()) return {};
+        llama_memory_seq_rm(llama_get_memory(ctx), (llama_seq_id)(llama_n_seq_max(ctx) - 1), (llama_pos)entries[0].offset, -1);
+        const int32_t n_batch_max = llama_n_batch(ctx);
+        std::vector<std::pair<uint32_t,int>> results;
+        // decode in chunks that fit within batch size
+        size_t ei = 0;
+        while (ei < entries.size()) {
+            common_batch_clear(batch);
+            int32_t n_added = 0;
+            size_t chunk_start = ei;
+            while (ei < entries.size()) {
+                auto & e = entries[ei];
+                if (n_added + (int32_t)e.tokens.size() > n_batch_max) break;
+                for (uint32_t i = 0; i < e.tokens.size(); i++) {
+                    bool last = (ei == entries.size() - 1) && (i == e.tokens.size() - 1);
+                    common_batch_add(batch, e.tokens[i], (llama_pos)(e.offset + i), {(llama_seq_id)(llama_n_seq_max(ctx) - 1)}, last);
+                }
+                n_added += (int32_t)e.tokens.size();
+                ei++;
+            }
+            if (llama_decode(ctx, batch) != 0) {
+                common_batch_clear(batch);
+                for (size_t k = chunk_start; k < ei; k++) results.push_back({entries[k].id, -2});
+                continue;
+            }
+            common_batch_clear(batch);
+            for (size_t k = chunk_start; k < ei; k++) {
+                auto & e = entries[k];
+                if (!llama_kv_cache_sys_prompt_register(ctx, e.id, (uint32_t)e.tokens.size())) {
+                    results.push_back({e.id, -3}); continue;
+                }
+                SRV_INF("system prompt bulk cached: id=%u, n_tokens=%zu\n", e.id, e.tokens.size());
+                results.push_back({e.id, (int)e.tokens.size()});
+            }
+        }
+        return results;
     }
 
     bool sys_prompt_exists(uint32_t id) const {
@@ -3703,6 +3755,35 @@ void server_routes::init_routes() {
             data,
             files,
             TASK_RESPONSE_TYPE_NONE); // infill is not OAI compatible
+    };
+
+
+    this->post_sys_prompt_bulk = [this](const server_http_req & req) {
+        auto res = create_response();
+        const json body = json::parse(req.body);
+
+        if (!body.is_array()) {
+            res->error(format_error_response("body must be a JSON array", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
+        const auto results = ctx_server.sys_prompt_cache_bulk(body);
+
+        json out = json::array();
+        for (const auto & [id, n] : results) {
+            if (n == -2) {
+                res->error(format_error_response("failed to decode system prompt", ERROR_TYPE_SERVER));
+                return res;
+            }
+            if (n == -3) {
+                res->error(format_error_response("failed to register system prompt", ERROR_TYPE_SERVER));
+                return res;
+            }
+            out.push_back({{"id", id}, {"n_tokens", n}});
+        }
+
+        res->ok({{"status", "cached"}, {"prompts", out}});
+        return res;
     };
 
     this->post_sys_prompt = [this](const server_http_req & req) {

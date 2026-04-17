@@ -101,6 +101,7 @@ struct server_routes {
     server_http_context::handler_t get_api_show;
     server_http_context::handler_t post_infill;
     server_http_context::handler_t post_sys_prompt;
+    server_http_context::handler_t post_sys_prompt_bulk;
     server_http_context::handler_t post_completions;
     server_http_context::handler_t post_completions_oai;
     server_http_context::handler_t post_chat_completions;

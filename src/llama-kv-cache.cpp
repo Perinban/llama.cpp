@@ -18,6 +18,7 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #elif defined(_WIN32)
 #include <windows.h>
 #endif
@@ -207,11 +208,13 @@ llama_kv_cache::llama_kv_cache(
                         total_size += GGML_PAD(ggml_backend_buft_get_alloc_size(buft, t), alignment);
                     }
                 }
+                struct stat kv_st {};
+                bool kv_warm = (stat(kv_mmap_path, &kv_st) == 0 && (size_t)kv_st.st_size == total_size);
                 int fd = open(kv_mmap_path, O_RDWR | O_CREAT, 0644);
                 if (fd < 0) {
                     throw std::runtime_error("failed to open kv mmap file");
                 }
-                if (ftruncate(fd, total_size) < 0) {
+                if (!kv_warm && ftruncate(fd, total_size) < 0) {
                     close(fd);
                     throw std::runtime_error("failed to resize kv mmap file");
                 }

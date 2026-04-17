@@ -1215,6 +1215,13 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
                     return true;
                 }, &lazy_ud);
         }
+        // restore user callback after compute so it does not persist into decode passes
+        struct restore_cb_guard {
+            ggml_backend_sched_t sched;
+            ggml_backend_sched_eval_callback cb;
+            void * ud;
+            ~restore_cb_guard() { ggml_backend_sched_set_eval_callback(sched, cb, ud); }
+        } restore_guard { sched.get(), cparams.cb_eval, cparams.cb_eval_user_data };
 
         //const auto t_start_us = ggml_time_us();
 
